@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"decentralized-net/blockchain"
+	"decentralized-net/compute"
 	"decentralized-net/p2p"
 	"decentralized-net/storage"
 
@@ -18,6 +19,7 @@ import (
 type APIServer struct {
 	Node  *p2p.Node
 	Vault storage.VaultInterface
+	VM    *compute.VM
 }
 
 // JobRequest represents a compute job submission
@@ -28,10 +30,11 @@ type JobRequest struct {
 }
 
 // StartAPIServer starts the HTTP gateway
-func StartAPIServer(node *p2p.Node, vault storage.VaultInterface, port int) {
+func StartAPIServer(node *p2p.Node, vault storage.VaultInterface, vm *compute.VM, port int) {
 	server := &APIServer{
 		Node:  node,
 		Vault: vault,
+		VM:    vm,
 	}
 
 	mux := http.NewServeMux()

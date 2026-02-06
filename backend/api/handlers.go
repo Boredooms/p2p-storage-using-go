@@ -40,19 +40,28 @@ func (s *APIServer) handleJobSubmit(w http.ResponseWriter, r *http.Request) {
 	var result []byte
 	var err error
 
+	// Try to find remote compute nodes first
 	if s.Node.DHT != nil {
 		providers, dhtErr := s.Node.DHT.FindProviders(ctx, "compute-node")
 		if dhtErr == nil && len(providers) > 0 {
-			targetPeer := providers[0].ID
-			if s.Node.Host.Network().Connectedness(targetPeer) != network.Connected {
-				s.Node.Host.Connect(ctx, providers[0])
+			// Filter out self
+			for _, provider := range providers {
+				if provider.ID != s.Node.Host.ID() {
+					targetPeer := provider.ID
+					if s.Node.Host.Network().Connectedness(targetPeer) != network.Connected {
+						s.Node.Host.Connect(ctx, provider)
+					}
+					result, err = s.Node.SendComputeReq(ctx, targetPeer, req.Wasm, []byte(req.Input), req.PaymentTx)
+					break
+				}
 			}
-			result, err = s.Node.SendComputeReq(ctx, targetPeer, req.Wasm, []byte(req.Input), req.PaymentTx)
-		} else {
-			err = fmt.Errorf("no compute nodes found")
 		}
-	} else {
-		err = fmt.Errorf("DHT not enabled")
+	}
+
+	// Fallback to local execution if no remote peers or remote execution failed
+	if result == nil && s.VM != nil {
+		log.Printf("[API] No remote peers available, executing locally")
+		result, err = s.VM.Run(req.Wasm, []byte(req.Input))
 	}
 
 	// Build response

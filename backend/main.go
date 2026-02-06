@@ -559,6 +559,7 @@ func setupNode(ctx context.Context, port *int, vaultPath *string, peerAddr *stri
 	log.Println("[P2P] Kademlia DHT Started!")
 
 	// 7. Compute Mode
+	var vm *compute.VM
 	computeMode := "full"
 	if mode != nil {
 		computeMode = *mode
@@ -568,7 +569,7 @@ func setupNode(ctx context.Context, port *int, vaultPath *string, peerAddr *stri
 			time.Sleep(5 * time.Second)
 			node.DHT.Announce("compute-node")
 		}()
-		vm := compute.NewVM(ctx)
+		vm = compute.NewVM(ctx)
 		// Note: We don't defer close here easily, caller must handle context cancellation
 		log.Println("[Compute] VM Ready")
 		node.HandleComputeStream(vm)
@@ -576,7 +577,7 @@ func setupNode(ctx context.Context, port *int, vaultPath *string, peerAddr *stri
 
 	// 8. API
 	if apiPort != nil && *apiPort > 0 {
-		api.StartAPIServer(node, vault, *apiPort)
+		api.StartAPIServer(node, vault, vm, *apiPort)
 	}
 
 	return node, vault, chain, w.Address(), nil
