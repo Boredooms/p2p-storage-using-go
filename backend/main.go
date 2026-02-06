@@ -236,15 +236,21 @@ func handlePayCmd(port *int, args []string) {
 	jsonData, _ := json.Marshal(tx)
 	resp, err := http.Post(apiURL, "application/json", bytes.NewBuffer(jsonData))
 
-	if err == nil && resp.StatusCode == 200 {
-		log.Printf("✅ Payment Sent Successfully! (via API)")
-		// Log response
+	if err != nil {
+		log.Printf("⚠️ API Connection Failed: %v", err)
+	} else {
+		defer resp.Body.Close()
 		body, _ := io.ReadAll(resp.Body)
-		log.Println(string(body))
-		return
+		if resp.StatusCode == 200 {
+			log.Printf("✅ Payment Sent Successfully! (via API)")
+			log.Println(string(body))
+			return
+		} else {
+			log.Printf("⚠️ API Error (Status %d): %s", resp.StatusCode, string(body))
+		}
 	}
 
-	log.Printf("⚠️ API Broadcast Failed (. Connection Refused?). Trying Direct DB Write...")
+	log.Printf("...Falling back to Direct DB Write (Will fail if node is running)...")
 
 	// 3. Fallback: Direct DB Write (Only works if node is OFF)
 	nodeID := "random"
