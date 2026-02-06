@@ -105,16 +105,16 @@ func (d *DHTWrapper) Announce(key string) error {
 
 // FindProviders asks the network "Who has this data/service?".
 // Returns a list of Peer IDs.
-func (d *DHTWrapper) FindProviders(key string) ([]peer.AddrInfo, error) {
+// FindProviders asks the network "Who has this data/service?".
+// Returns a list of Peer IDs.
+func (d *DHTWrapper) FindProviders(ctx context.Context, key string) ([]peer.AddrInfo, error) {
 	c, err := getCID(key)
 	if err != nil {
 		return nil, fmt.Errorf("invalid cid: %w", err)
 	}
 
 	// FindProvidersAsync returns a channel of providers.
-	ctx, cancel := context.WithTimeout(d.Ctx, 10*time.Second)
-	defer cancel()
-
+	// Use the caller-provided context (which may have a timeout)
 	providers := d.DHT.FindProvidersAsync(ctx, c, 10) // Find up to 10 providers
 
 	var nodes []peer.AddrInfo

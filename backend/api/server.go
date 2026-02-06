@@ -87,7 +87,7 @@ func (s *APIServer) handleJob(w http.ResponseWriter, r *http.Request) {
 	// Simple discovery logic (reused from main.go)
 	// In a real app, we might cache providers.
 	ctx := r.Context()
-	providers, err := s.Node.DHT.FindProviders("compute-node")
+	providers, err := s.Node.DHT.FindProviders(ctx, "compute-node")
 	if err != nil || len(providers) == 0 {
 		http.Error(w, "No compute nodes found in the network", http.StatusServiceUnavailable)
 		return
