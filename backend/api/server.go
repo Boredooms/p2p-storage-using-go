@@ -36,18 +36,39 @@ func StartAPIServer(node *p2p.Node, vault storage.VaultInterface, port int) {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/job", server.handleJob)
+	mux.HandleFunc("/api/jobs/submit", server.handleJobSubmit)
 	mux.HandleFunc("/api/v1/upload", server.handleUpload)
 	mux.HandleFunc("/api/v1/transaction", server.handleTransaction)
+	mux.HandleFunc("/api/health", server.handleHealth)
+
+	// Apply CORS
+	handler := enableCORS(mux)
 
 	addr := fmt.Sprintf(":%d", port)
 	log.Printf("[API] HTTP Gateway listening on http://localhost%s", addr)
 
 	// Run server in background
 	go func() {
-		if err := http.ListenAndServe(addr, mux); err != nil {
+		if err := http.ListenAndServe(addr, handler); err != nil {
 			log.Printf("[API] Server failed: %v", err)
 		}
 	}()
+}
+
+// enableCORS adds CORS headers to allow frontend requests
+func enableCORS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
 }
 
 // handleJob handles POST /api/v1/job
