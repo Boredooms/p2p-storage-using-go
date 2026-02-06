@@ -8,7 +8,13 @@ import (
 )
 
 // CompileCToWasm compiles C source code to WASM using emcc (Emscripten)
+// Returns error if emcc is not installed
 func CompileCToWasm(sourceCode string) ([]byte, error) {
+	// Check if emcc is available
+	if _, err := exec.LookPath("emcc"); err != nil {
+		return nil, fmt.Errorf("emcc (Emscripten) not installed. Please either:\n1. Install Emscripten locally\n2. Upload pre-compiled WASM instead of C source\n3. Use the browser-based compiler (coming soon)")
+	}
+
 	// Create temp directory
 	tmpDir, err := os.MkdirTemp("", "wasm-compile-*")
 	if err != nil {
@@ -25,8 +31,7 @@ func CompileCToWasm(sourceCode string) ([]byte, error) {
 	// Output WASM file
 	wasmFile := filepath.Join(tmpDir, "output.wasm")
 
-	// Compile with emcc (if available) or fallback to clang
-	// For MVP, we'll use a simple approach
+	// Compile with emcc
 	cmd := exec.Command("emcc", srcFile, "-o", wasmFile,
 		"-O2",
 		"-s", "WASM=1",
