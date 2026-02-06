@@ -1,16 +1,16 @@
 {
-	"name": "Go P2P Node",
-	"image": "mcr.microsoft.com/devcontainers/go:1-1.23-bookworm",
-	"features": {
-		"ghcr.io/devcontainers/features/docker-in-docker:2": {}
-	},
-	"forwardPorts": [3000, 8080],
-	"customizations": {
-		"vscode": {
-			"extensions": [
-				"golang.go"
-			]
-		}
-	},
-	"postCreateCommand": "cd backend && go mod tidy"
+    "name": "Go P2P Node",
+    "image": "mcr.microsoft.com/devcontainers/go:1-1.23-bookworm",
+    "forwardPorts": [
+        3000,
+        8080
+    ],
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "golang.go"
+            ]
+        }
+    },
+    "postCreateCommand": "cd backend && go mod tidy"
 }
