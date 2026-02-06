@@ -77,8 +77,8 @@ func main() {
 		// It creates a full node.
 		startFullNode(ctx, port, vaultPath, mode, peerAddr, apiPort, true)
 	default:
-		// No command -> Start Full Node
-		startFullNode(ctx, port, vaultPath, mode, peerAddr, apiPort, false)
+		// No command -> Start Full Node (Mining Enabled by default for MVP)
+		startFullNode(ctx, port, vaultPath, mode, peerAddr, apiPort, true)
 	}
 }
 
