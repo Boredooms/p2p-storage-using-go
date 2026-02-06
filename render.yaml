@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: p2p-compute-backend
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    envVars:
+      - key: PORT
+        value: 8080
+    plan: free
