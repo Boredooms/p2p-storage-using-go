@@ -106,6 +106,8 @@ func handleRunJobCmd(ctx context.Context, args []string, bootPeer *string) {
 	inputText := jobCmd.String("input", "", "Input string data")
 	targetID := jobCmd.String("target", "", "Specific Peer ID to send job to (optional)")
 	txID := jobCmd.String("tx", "", "Transaction ID for payment")
+	// Allow --peer to be specified AFTER the subcommand
+	subPeer := jobCmd.String("peer", "", "Bootstrap peer address")
 
 	if err := jobCmd.Parse(args); err != nil {
 		log.Fatalf("Failed to parse run-job flags: %v", err)
@@ -122,9 +124,17 @@ func handleRunJobCmd(ctx context.Context, args []string, bootPeer *string) {
 		log.Fatalf("Failed to start P2P client: %v", err)
 	}
 
-	// Bootstrapping (Crucial to find the server)
-	if *bootPeer != "" {
-		node.EnableDHT([]string{*bootPeer})
+	// Bootstrapping
+	// Prioritize subcommand flag, then global flag
+	effectivePeer := ""
+	if *subPeer != "" {
+		effectivePeer = *subPeer
+	} else if *bootPeer != "" {
+		effectivePeer = *bootPeer
+	}
+
+	if effectivePeer != "" {
+		node.EnableDHT([]string{effectivePeer})
 	} else {
 		// Try to look for local defaults if not specified?
 		// For now, assume user provides --peer OR we rely on mDNS (if enabled in libp2p)
