@@ -17,8 +17,9 @@ import (
 )
 
 const (
-	StoreProtocol = protocol.ID("/decentralized-net/store/1.0.0")
-	StreamTimeout = 10 * time.Second
+	StoreProtocol    = protocol.ID("/decentralized-net/store/1.0.0")
+	RetrieveProtocol = protocol.ID("/decentralized-net/retrieve/1.0.0")
+	StreamTimeout    = 10 * time.Second
 )
 
 // HandleStoreStream accepts incoming store requests.
@@ -92,6 +93,62 @@ func (n *Node) HandleStoreStream(v storage.VaultInterface) {
 	})
 }
 
+// HandleRetrieveStream handles incoming requests for data.
+// Protocol: [KeyLen] [Key] -> Response: [Status] [DataLen] [Data]
+func (n *Node) HandleRetrieveStream(v storage.VaultInterface) {
+	n.Host.SetStreamHandler(RetrieveProtocol, func(s network.Stream) {
+		defer s.Close()
+		s.SetDeadline(time.Now().Add(StreamTimeout))
+
+		reader := bufio.NewReader(s)
+
+		// 1. Read Key Len
+		var keyLen uint32
+		if err := binary.Read(reader, binary.BigEndian, &keyLen); err != nil {
+			return
+		}
+
+		// 2. Read Key
+		key := make([]byte, keyLen)
+		if _, err := io.ReadFull(reader, key); err != nil {
+			return
+		}
+
+		log.Printf("[P2P] Peer %s requesting shard: %s", s.Conn().RemotePeer(), string(key))
+
+		// 3. Check Vault
+		var data []byte
+		var err error
+		var status byte = 0
+
+		if v != nil {
+			data, err = v.Get(key)
+			if err != nil {
+				log.Printf("[P2P] Shard %s not found: %v", string(key), err)
+				status = 1 // Not Found
+			}
+		} else {
+			status = 1 // No Vault
+		}
+
+		// 4. Send Response Header (Status + DataLen)
+		if err := binary.Write(s, binary.BigEndian, status); err != nil {
+			return
+		}
+
+		// If success, send data
+		if status == 0 {
+			if err := binary.Write(s, binary.BigEndian, uint32(len(data))); err != nil {
+				return
+			}
+			if _, err := s.Write(data); err != nil {
+				return
+			}
+			log.Printf("[P2P] Sent shard %s (%d bytes) to %s", string(key), len(data), s.Conn().RemotePeer())
+		}
+	})
+}
+
 // SendStoreReq connects to a peer and sends data with the defined protocol.
 func (n *Node) SendStoreReq(ctx context.Context, p peer.ID, key []byte, data []byte) error {
 	s, err := n.Host.NewStream(ctx, p, StoreProtocol)
@@ -137,4 +194,47 @@ func (n *Node) SendStoreReq(ctx context.Context, p peer.ID, key []byte, data []b
 	}
 
 	return nil
+}
+
+// SendRetrieveReq requests data from a peer using the RetrieveProtocol.
+func (n *Node) SendRetrieveReq(ctx context.Context, p peer.ID, key string) ([]byte, error) {
+	s, err := n.Host.NewStream(ctx, p, RetrieveProtocol)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open stream: %w", err)
+	}
+	defer s.Close()
+	s.SetDeadline(time.Now().Add(StreamTimeout))
+
+	// 1. Send Key
+	keyBytes := []byte(key)
+	if err := binary.Write(s, binary.BigEndian, uint32(len(keyBytes))); err != nil {
+		return nil, err
+	}
+	if _, err := s.Write(keyBytes); err != nil {
+		return nil, err
+	}
+
+	// 2. Read Status
+	var status byte
+	if err := binary.Read(s, binary.BigEndian, &status); err != nil {
+		return nil, err
+	}
+
+	if status != 0 {
+		return nil, fmt.Errorf("peer returned error status (file not found?)")
+	}
+
+	// 3. Read Data Len
+	var dataLen uint32
+	if err := binary.Read(s, binary.BigEndian, &dataLen); err != nil {
+		return nil, err
+	}
+
+	// 4. Read Data
+	data := make([]byte, dataLen)
+	if _, err := io.ReadFull(s, data); err != nil {
+		return nil, err
+	}
+
+	return data, nil
 }

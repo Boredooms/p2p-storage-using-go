@@ -21,6 +21,7 @@ import (
 	"decentralized-net/storage"
 	"decentralized-net/wallet"
 
+	"github.com/klauspost/reedsolomon"
 	"github.com/libp2p/go-libp2p/core/peer"
 )
 
@@ -392,35 +393,74 @@ func handleDownloadCmd(ctx context.Context, peerAddr *string, args []string) {
 
 	log.Printf("Attempting to reconstruct: %s", *fileToDownload)
 
-	// 	// shards := make([][]byte, 14) // Unused for now
+	// Collect shards
+	shards := make([][]byte, 14)
 	foundCount := 0
 
-	// Try to find shards via DHT
+	// Try to find and fetch shards via DHT
 	for i := 0; i < 14; i++ {
 		keyStr := fmt.Sprintf("%s-shard-%d", *fileToDownload, i)
 
 		// 1. Query DHT for providers
 		if node.DHT != nil {
-			// log.Printf("Shard %d checking DHT...", i)
 			ctxT, cancel := context.WithTimeout(ctx, 5*time.Second)
-			providers, err := node.DHT.FindProviders(ctxT, keyStr) // Fix: Use ctxT
+			providers, err := node.DHT.FindProviders(ctxT, keyStr)
 			cancel()
 
 			if err == nil && len(providers) > 0 {
-				log.Printf("Shard %d found on %s. Requesting...", i, providers[0].ID)
-				// TODO: Implement "RetrieveShard" protocol.
-				foundCount++
+				// 2. Fetch shard from provider
+				log.Printf("Shard %d found on %s. Fetching...", i, providers[0].ID)
+
+				ctxReq, cancelReq := context.WithTimeout(ctx, 10*time.Second)
+				data, err := node.SendRetrieveReq(ctxReq, providers[0].ID, keyStr)
+				cancelReq()
+
+				if err != nil {
+					log.Printf("Failed to retrieve shard %d: %v", i, err)
+				} else {
+					shards[i] = data
+					foundCount++
+					log.Printf("✓ Shard %d retrieved (%d bytes)", i, len(data))
+				}
 			}
 		}
 	}
 
 	if foundCount < 10 {
-		log.Printf("Cannot reconstruct. Found providers for %d/10 required shards.", foundCount)
-		log.Println("NOTE: Actual retrieval requires implementing a 'RetrieveProtocol'.")
-		// graceful exit
-	} else {
-		log.Println("Found all shards! (Retrieval logic pending implementation).")
+		log.Printf("❌ Cannot reconstruct. Only found %d/10 required shards.", foundCount)
+		return
 	}
+
+	log.Printf("✓ Found %d shards. Reconstructing file...", foundCount)
+
+	// 3. Reconstruct using Reed-Solomon
+	enc, err := reedsolomon.New(10, 4)
+	if err != nil {
+		log.Fatalf("Failed to create Reed-Solomon encoder: %v", err)
+	}
+
+	if err := enc.Reconstruct(shards); err != nil {
+		log.Fatalf("Failed to reconstruct shards: %v", err)
+	}
+
+	// 4. Join data shards
+	var reconstructed []byte
+	for i := 0; i < 10; i++ {
+		reconstructed = append(reconstructed, shards[i]...)
+	}
+
+	// 5. Trim to original size
+	if *size > 0 && *size < len(reconstructed) {
+		reconstructed = reconstructed[:*size]
+	}
+
+	// 6. Write to disk
+	outputFile := "downloaded_" + *fileToDownload
+	if err := os.WriteFile(outputFile, reconstructed, 0644); err != nil {
+		log.Fatalf("Failed to write file: %v", err)
+	}
+
+	log.Printf("✅ Download Complete! File saved as: %s (%d bytes)", outputFile, len(reconstructed))
 }
 
 func startFullNode(ctx context.Context, port *int, vaultPath *string, mode *string, peerAddr *string, apiPort *int, isMining bool) {
@@ -506,6 +546,7 @@ func setupNode(ctx context.Context, port *int, vaultPath *string, peerAddr *stri
 
 	// 5. Handlers
 	node.HandleStoreStream(vault)
+	node.HandleRetrieveStream(vault)
 	node.SetupBlockPropagation()
 
 	// 6. Bootstrapping
