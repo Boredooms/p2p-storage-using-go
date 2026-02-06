@@ -1,0 +1,40 @@
+# fly.toml app configuration file generated for decentralized-net
+
+app = "decentralized-net-demo" # Change this to a unique name!
+primary_region = "iad" # Ashburn, VA (Change to your region)
+
+[build]
+  dockerfile = "Dockerfile"
+
+# 1. Mount Persistent Storage (Free 1GB)
+# You MUST run: fly volumes create node_data -s 1
+[mounts]
+  source = "node_data"
+  destination = "/root/data"
+
+# 2. Expose P2P Port (UDP/TCP)
+[[services]]
+  protocol = "tcp"
+  internal_port = 3000
+  ports = [
+    { port = 3000, handlers = [] } # Raw TCP for P2P
+  ]
+
+# 3. Expose API Port (HTTP)
+[[services]]
+  protocol = "tcp"
+  internal_port = 8080
+  ports = [
+    { port = 80, handlers = ["http"] },
+    { port = 443, handlers = ["tls", "http"] }
+  ]
+  [services.concurrency]
+    type = "connections"
+    hard_limit = 25
+    soft_limit = 20
+
+# 4. Check Health
+[[services.tcp_checks]]
+  interval = "10s"
+  timeout = "2s"
+  grace_period = "5s"

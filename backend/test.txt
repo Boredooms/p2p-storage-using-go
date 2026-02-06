@@ -1,0 +1,3 @@
+Hello Decentralized World!
+This is a test file to demonstrate Sharding and Encryption.
+If you can read this after downloading, the system works!

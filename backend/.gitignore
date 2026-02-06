@@ -1,0 +1,26 @@
+# Binaries
+*.exe
+*.dll
+*.so
+*.dylib
+node
+
+# Logs
+*.log
+
+# Data & Wallets
+data/
+wallet_*.dat
+vault/
+*.db
+
+# Test Artifacts
+restored_*
+pay.log
+miner.log
+worker.log
+worker_debug.log
+
+# IDE
+.vscode/
+.idea/
