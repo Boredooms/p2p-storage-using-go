@@ -19,7 +19,7 @@ import (
 const (
 	StoreProtocol    = protocol.ID("/decentralized-net/store/1.0.0")
 	RetrieveProtocol = protocol.ID("/decentralized-net/retrieve/1.0.0")
-	StreamTimeout    = 10 * time.Second
+	StreamTimeout    = 30 * time.Second
 )
 
 // HandleStoreStream accepts incoming store requests.
