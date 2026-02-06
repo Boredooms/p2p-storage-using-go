@@ -432,7 +432,14 @@ func setupNode(ctx context.Context, port *int, vaultPath *string, peerAddr *stri
 	log.Printf("[Blockchain] Initialized. Tip Hash: %s", chain.LastHash)
 
 	// 3. Vault
-	secretKey := []byte("12345678901234567890123456789012")
+	// Derive key path from vault path (e.g. ./data/vault -> ./data/vault.key)
+	keyPath := *vaultPath + ".key"
+	secretKey, err := storage.LoadOrGenerateKey(keyPath)
+	if err != nil {
+		return nil, nil, nil, "", fmt.Errorf("key load/gen failed: %v", err)
+	}
+	log.Printf("[Crypto] Vault Key loaded from %s", keyPath)
+
 	if _, err := os.Stat(*vaultPath); os.IsNotExist(err) {
 		os.MkdirAll(*vaultPath, 0700)
 	}
