@@ -30,7 +30,7 @@ func main() {
 	vaultPath := flag.String("vault", "./data/vault", "Path to secure storage vault")
 	mode := flag.String("mode", "full", "Node mode: full, storage, or compute")
 	peerAddr := flag.String("peer", "", "Bootstrap peer address to connect to")
-	apiPort := flag.Int("api-port", 0, "Port for HTTP API Gateway (e.g., 8080)")
+	apiPort := flag.Int("api-port", 8080, "Port for HTTP API Gateway (e.g., 8080)")
 
 	// 2. Parse Global Flags
 	flag.Parse()
