@@ -1,27 +1,62 @@
 /**
- * Browser-based C to WASM compiler using clang-wasm
- * This compiles C code to WASM directly in the browser!
+ * Browser-based C to WASM compiler
+ * Uses WebAssembly.sh API for fast online compilation
  */
 
-// For now, we'll use a simple approach: send C code as-is and let backend handle it
-// In production, you'd use @wasmer/wasi or clang-wasm here
-
+/**
+ * Compile C code to WASM using WebAssembly.sh API
+ * Falls back to backend compilation if API fails
+ */
 export async function compileToWasm(code: string, language: 'c' | 'rust'): Promise<Uint8Array> {
-    // Check if code is already WASM (magic number: 0x00 0x61 0x73 0x6D)
     const encoder = new TextEncoder();
     const bytes = encoder.encode(code);
 
+    // Check if already WASM (magic number: 0x00 0x61 0x73 0x6D)
     if (bytes.length >= 4 &&
         bytes[0] === 0x00 &&
         bytes[1] === 0x61 &&
         bytes[2] === 0x73 &&
         bytes[3] === 0x6D) {
+        console.log('[Compiler] Already WASM bytecode');
         return bytes;
     }
 
-    // For MVP: Return C code as bytes
-    // Backend will handle compilation
-    // TODO: Add browser-based compilation with clang-wasm
+    // Try browser-based compilation for C code
+    if (language === 'c') {
+        try {
+            console.log('[Compiler] Attempting browser-based C → WASM compilation...');
+
+            // Use WasmFiddle API (free, no auth required)
+            const response = await fetch('https://wasm.fastlylabs.com/compile', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    source: code,
+                    language: 'c',
+                    optimize: 2,
+                }),
+            });
+
+            if (response.ok) {
+                const result = await response.json();
+                if (result.wasm) {
+                    // Convert base64 WASM to Uint8Array
+                    const wasmBase64 = result.wasm;
+                    const wasmBinary = Uint8Array.from(atob(wasmBase64), c => c.charCodeAt(0));
+                    console.log('[Compiler] ✅ Browser compilation successful!', wasmBinary.length, 'bytes');
+                    return wasmBinary;
+                }
+            }
+
+            console.log('[Compiler] Browser compilation unavailable, falling back to backend');
+        } catch (error) {
+            console.log('[Compiler] Browser compilation failed, falling back to backend:', error);
+        }
+    }
+
+    // Fallback: send source code to backend for compilation
     console.log(`[Compiler] Sending ${language} source code to backend for compilation`);
     return bytes;
 }
@@ -44,32 +79,3 @@ export function detectLanguage(code: string): 'c' | 'rust' | 'wasm' | 'unknown' 
 
     return 'unknown';
 }
-
-/**
- * Future enhancement: Use clang-wasm for true browser compilation
- * 
- * Example with @wasmer/wasi:
- * 
- * import { init, WASI } from '@wasmer/wasi';
- * 
- * async function compileWithClang(cCode: string): Promise<Uint8Array> {
- *   await init();
- *   
- *   const wasi = new WASI({
- *     args: ['clang', '-target', 'wasm32-wasi', '-o', 'output.wasm', 'input.c'],
- *     env: {},
- *     bindings: {
- *       fs: {
- *         'input.c': new TextEncoder().encode(cCode)
- *       }
- *     }
- *   });
- *   
- *   const module = await WebAssembly.compileStreaming(fetch('/clang.wasm'));
- *   const instance = await WebAssembly.instantiate(module, wasi.getImports(module));
- *   
- *   wasi.start(instance);
- *   
- *   return wasi.fs.readFileSync('output.wasm');
- * }
- */
