@@ -1,6 +1,6 @@
 module decentralized-net
 
-go 1.24.6
+go 1.24.5
 
 require (
 	github.com/dgraph-io/badger/v3 v3.2103.5
