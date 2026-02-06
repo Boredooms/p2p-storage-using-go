@@ -1,6 +1,6 @@
 {
     "name": "Go P2P Node",
-    "image": "mcr.microsoft.com/devcontainers/go:1-1.24-bookworm",
+    "image": "golang:1.24",
     "forwardPorts": [
         3000,
         8080
