@@ -1,39 +1,29 @@
-# Build Stage
-FROM golang:1.24-alpine AS builder
+FROM golang:1.21-alpine AS builder
 
 WORKDIR /app
 
-# Install build dependencies
-# (gcc/musl-dev needed for CGO if we used SQLite, but BadgerDB is pure Go usually. 
-# However, race detection or other net tools might need it. Safe to have.)
-RUN apk add --no-cache git build-base
-
-# Copy Module files
+# Copy go mod files
 COPY go.mod go.sum ./
 RUN go mod download
 
-# Copy Source
+# Copy source code
 COPY . .
 
-# Build Binary
-# CGO_ENABLED=0 for static binary (Alpine compatible)
-RUN CGO_ENABLED=0 GOOS=linux go build -o /node .
+# Build the application
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o main .
 
-# Final Stage (Minimal)
+# Final stage
 FROM alpine:latest
+
+RUN apk --no-cache add ca-certificates
 
 WORKDIR /root/
 
-# Install CA Certs for HTTPS requests
-RUN apk --no-cache add ca-certificates
+# Copy the binary from builder
+COPY --from=builder /app/main .
 
-COPY --from=builder /node .
+# Expose API port
+EXPOSE 8080
 
-# Expose P2P and API ports
-EXPOSE 3000 8080
-
-# Create data directory for volume mount
-RUN mkdir -p ./data
-
-# Default Command (Can be overridden by Fly.toml)
-CMD ["./node", "--port", "3000", "--mode", "full", "--vault", "./data/vault"]
+# Run the application
+CMD ["./main"]
