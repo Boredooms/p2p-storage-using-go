@@ -65,9 +65,9 @@ func main() {
 		// For this MVP, we will try to open it. If locked, we warn the user.
 		handlePayCmd(port, args[1:])
 	case "upload":
-		handleUploadCmd(ctx, port, vaultPath, peerAddr, args[1:])
+		handleUploadCmd(ctx, peerAddr, args[1:])
 	case "download":
-		handleDownloadCmd(ctx, port, vaultPath, peerAddr, args[1:])
+		handleDownloadCmd(ctx, peerAddr, args[1:])
 	case "mine":
 		// Mine is a server-side activity usually, but exposed as CLI.
 		// It creates a full node.
@@ -159,7 +159,9 @@ func handleRunJobCmd(ctx context.Context, args []string, bootPeer *string) {
 		targetPeer = id
 	} else {
 		log.Println("No --target specified. Searching network for 'compute-node'...")
-		providers, err := node.DHT.FindProviders("compute-node")
+		ctxT, cancel := context.WithTimeout(ctx, 10*time.Second)
+		providers, err := node.DHT.FindProviders(ctxT, "compute-node")
+		cancel()
 		if err != nil || len(providers) == 0 {
 			log.Fatal("No compute nodes found. Ensure the server is running.")
 		}
@@ -223,15 +225,11 @@ func handlePayCmd(port *int, args []string) {
 	log.Printf("Confirmed in Block #%d", newBlock.Index)
 }
 
-func handleUploadCmd(ctx context.Context, port *int, vaultPath *string, peerAddr *string, args []string) {
-	// Upload needs a full node (Vault + P2P) to shard and distribute
-	node, vault, _, _, err := setupNode(ctx, port, vaultPath, peerAddr, nil, nil)
-	if err != nil {
-		log.Fatalf("Failed to setup node for upload: %v", err)
-	}
-
+func handleUploadCmd(ctx context.Context, peerAddr *string, args []string) {
+	// Lightweight P2P Node (No Chain, No Vault to avoid Lock)
 	uploadCmd := flag.NewFlagSet("upload", flag.ExitOnError)
 	fileToUpload := uploadCmd.String("file", "", "File to upload")
+	subPeer := uploadCmd.String("peer", "", "Bootstrap peer address")
 
 	if err := uploadCmd.Parse(args); err != nil {
 		log.Fatalf("Failed to parse upload flags: %v", err)
@@ -240,6 +238,27 @@ func handleUploadCmd(ctx context.Context, port *int, vaultPath *string, peerAddr
 	if *fileToUpload == "" {
 		log.Fatal("Please specify --file")
 	}
+
+	log.Printf("[CLI] Starting lightweight upload client...")
+	node, err := p2p.NewNode(ctx, 0)
+	if err != nil {
+		log.Fatalf("Failed to start P2P client: %v", err)
+	}
+
+	// Bootstrapping
+	effectivePeer := ""
+	if *subPeer != "" {
+		effectivePeer = *subPeer
+	} else if *peerAddr != "" {
+		effectivePeer = *peerAddr
+	}
+
+	if effectivePeer != "" {
+		node.EnableDHT([]string{effectivePeer})
+	} else {
+		node.EnableDHT(nil)
+	}
+	time.Sleep(2 * time.Second) // Wait for DHT
 
 	log.Printf("Uploading file: %s", *fileToUpload)
 
@@ -263,59 +282,39 @@ func handleUploadCmd(ctx context.Context, port *int, vaultPath *string, peerAddr
 
 	log.Printf("File split into %d shards.", len(shards))
 
-	// Distributed Storage Logic
-	// Give DHT/Peers a moment to connect if bootstrapping
-	time.Sleep(2 * time.Second)
-
 	peers := node.Host.Network().Peers()
-	allNodes := append(peers, node.Host.ID()) // Include self
-	log.Printf("[P2P] Distributing shards across %d nodes...", len(allNodes))
+	if len(peers) == 0 {
+		log.Fatal("No peers found! Cannot upload. (Did you specify --peer?)")
+	}
+	log.Printf("[P2P] Distributing shards across %d peers...", len(peers))
 
+	// Simple Distribution Strategy: Round Robin across *connected* peers
+	// (Since we are a client, we don't store locally)
 	for i, shard := range shards {
-		targetPeer := allNodes[i%len(allNodes)]
+		targetPeer := peers[i%len(peers)]
 		key := []byte(fmt.Sprintf("%s-shard-%d", *fileToUpload, i))
 
-		if targetPeer == node.Host.ID() {
-			err := vault.Store(key, shard)
-			if err != nil {
-				log.Printf("Failed to store shard %d locally: %v", i, err)
-			} else {
-				log.Printf("Shard %d -> SELF (Stored)", i)
-				if node.DHT != nil {
-					go node.DHT.Announce(string(key))
-				}
-			}
+		log.Printf("Shard %d -> Sending to %s...", i, targetPeer)
+		err := node.SendStoreReq(ctx, targetPeer, key, shard)
+		if err != nil {
+			log.Printf("Failed to send shard %d to %s: %v", i, targetPeer, err)
 		} else {
-			log.Printf("Shard %d -> Sending to %s...", i, targetPeer)
-			err := node.SendStoreReq(ctx, targetPeer, key, shard)
-			if err != nil {
-				log.Printf("Failed to send shard %d to %s: %v", i, targetPeer, err)
-			} else {
-				log.Printf("Shard %d -> %s (ACK Received)", i, targetPeer)
-			}
+			log.Printf("Shard %d -> %s (ACK)", i, targetPeer)
+			// Announce it on DHT so others can find it?
+			// We can't announce it because *we* don't have it.
+			// The *receiver* should announce it. (Ideally updated Store logic does this).
 		}
 	}
 
 	log.Printf("Upload Complete! original_size=%d", fileSize)
-	// We don't block here because it's a CLI command.
-	// However, if we uploaded to ourselves, we might want to keep running to serve it?
-	// For a CLI tool, typically you upload and exit. The "Daemon" node should be running separately if you want to serve.
-	// But in this P2P design, *we* are a node.
-	// If we exit, our local shards become unavailable immediately.
-	// So we should probably block IF we stored anything locally.
-	log.Println("Node remaining active to serve stored shards. Press Ctrl+C to exit.")
-	select {}
 }
 
-func handleDownloadCmd(ctx context.Context, port *int, vaultPath *string, peerAddr *string, args []string) {
-	node, vault, _, _, err := setupNode(ctx, port, vaultPath, peerAddr, nil, nil)
-	if err != nil {
-		log.Fatalf("Failed to setup node for download: %v", err)
-	}
-
+func handleDownloadCmd(ctx context.Context, peerAddr *string, args []string) {
+	// Lightweight Download Client
 	downloadCmd := flag.NewFlagSet("download", flag.ExitOnError)
 	fileToDownload := downloadCmd.String("file", "", "File to download/reconstruct")
 	size := downloadCmd.Int("size", 0, "Original file size")
+	subPeer := downloadCmd.String("peer", "", "Bootstrap peer address")
 
 	if err := downloadCmd.Parse(args); err != nil {
 		log.Fatalf("Failed to parse download flags: %v", err)
@@ -325,60 +324,58 @@ func handleDownloadCmd(ctx context.Context, port *int, vaultPath *string, peerAd
 		log.Fatal("Please specify --file and --size")
 	}
 
-	log.Printf("Attempting to reconstruct: %s", *fileToDownload)
-	time.Sleep(2 * time.Second) // Wait for connections
+	log.Printf("[CLI] Starting lightweight download client...")
+	node, err := p2p.NewNode(ctx, 0)
+	if err != nil {
+		log.Fatalf("Failed to start P2P client: %v", err)
+	}
 
-	shards := make([][]byte, 14)
+	// Bootstrapping
+	effectivePeer := ""
+	if *subPeer != "" {
+		effectivePeer = *subPeer
+	} else if *peerAddr != "" {
+		effectivePeer = *peerAddr
+	}
+
+	if effectivePeer != "" {
+		node.EnableDHT([]string{effectivePeer})
+	} else {
+		node.EnableDHT(nil)
+	}
+	time.Sleep(2 * time.Second)
+
+	log.Printf("Attempting to reconstruct: %s", *fileToDownload)
+
+	// 	// shards := make([][]byte, 14) // Unused for now
 	foundCount := 0
 
-	// Try to find shards
+	// Try to find shards via DHT
 	for i := 0; i < 14; i++ {
 		keyStr := fmt.Sprintf("%s-shard-%d", *fileToDownload, i)
-		key := []byte(keyStr)
 
-		// 1. Try Local
-		data, err := vault.Get(key)
-		if err == nil {
-			log.Printf("Shard %d found locally.", i)
-			shards[i] = data
-			foundCount++
-			continue
-		}
-
-		// 2. Try DHT
+		// 1. Query DHT for providers
 		if node.DHT != nil {
-			log.Printf("Shard %d missing. Querying DHT...", i)
-			providers, err := node.DHT.FindProviders(keyStr)
+			// log.Printf("Shard %d checking DHT...", i)
+			ctxT, cancel := context.WithTimeout(ctx, 5*time.Second)
+			providers, err := node.DHT.FindProviders(ctxT, keyStr) // Fix: Use ctxT
+			cancel()
+
 			if err == nil && len(providers) > 0 {
-				log.Printf("Found provider for shard %d: %s", i, providers[0].ID)
-				// Simplified: Just proving discovery works for MVP.
-				// Implementing full retrieval requires a new P2P protocol handler.
+				log.Printf("Shard %d found on %s. Requesting...", i, providers[0].ID)
+				// TODO: Implement "RetrieveShard" protocol.
+				foundCount++
 			}
 		}
 	}
 
 	if foundCount < 10 {
-		log.Fatalf("Cannot reconstruct. Only found %d/10 required shards (mostly local for now).", foundCount)
+		log.Printf("Cannot reconstruct. Found providers for %d/10 required shards.", foundCount)
+		log.Println("NOTE: Actual retrieval requires implementing a 'RetrieveProtocol'.")
+		// graceful exit
+	} else {
+		log.Println("Found all shards! (Retrieval logic pending implementation).")
 	}
-
-	// Reconstruct
-	sm, err := storage.NewShardManager(10, 4)
-	if err != nil {
-		log.Fatalf("Failed to init sharding: %v", err)
-	}
-
-	reconstructedData, err := sm.Reconstruct(shards, *size)
-	if err != nil {
-		log.Fatalf("Reconstruction failed: %v", err)
-	}
-
-	outputFile := "restored_" + *fileToDownload
-	err = os.WriteFile(outputFile, reconstructedData, 0644)
-	if err != nil {
-		log.Fatalf("Failed to write output file: %v", err)
-	}
-
-	log.Printf("Success! File restored to: %s", outputFile)
 }
 
 func startFullNode(ctx context.Context, port *int, vaultPath *string, mode *string, peerAddr *string, apiPort *int, isMining bool) {
