@@ -178,7 +178,7 @@ func (bc *Blockchain) AddBlock(txs []*Transaction) *Block {
 	// Proof of Work
 	// fmt.Println("⛏️  Mining new block...")
 	MineBlock(newBlock)
-	fmt.Printf("💎 Block Mined! Hash: %s\n", newBlock.Hash)
+	// fmt.Printf("💎 Block Mined! Hash: %s\n", newBlock.Hash)
 
 	err = bc.Database.Update(func(txn *badger.Txn) error {
 		// Save Block
@@ -205,7 +205,7 @@ func (bc *Blockchain) AddBlock(txs []*Transaction) *Block {
 			// Let's just index "tx_<ID>" -> "Block_<Hash>"
 			// And implementation of FindTransaction will fetch Block -> find Tx.
 			key := []byte("tx_" + tx.ID)
-			fmt.Printf("[DEBUG] Indexing Transaction: %s -> Block: %s\n", string(key), newBlock.Hash)
+			// fmt.Printf("[DEBUG] Indexing Transaction: %s -> Block: %s\n", string(key), newBlock.Hash)
 			err = txn.Set(key, []byte(newBlock.Hash))
 			if err != nil {
 				return err
@@ -230,7 +230,7 @@ func (bc *Blockchain) FindTransaction(ID string) (Transaction, error) {
 
 	err := bc.Database.View(func(txn *badger.Txn) error {
 		key := []byte("tx_" + ID)
-		fmt.Printf("[DEBUG] Looking up Transaction Key: %s\n", string(key))
+		// fmt.Printf("[DEBUG] Looking up Transaction Key: %s\n", string(key))
 		item, err := txn.Get(key)
 		if err != nil {
 			return err

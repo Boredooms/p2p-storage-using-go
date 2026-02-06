@@ -442,7 +442,9 @@ func startFullNode(ctx context.Context, port *int, vaultPath *string, mode *stri
 			if err := node.BroadcastBlock(block); err != nil {
 				log.Printf("[Miner] Failed broadcast: %v", err)
 			} else {
-				log.Printf("[Miner] Mined Block #%d", block.Index)
+				if block.Index%10 == 0 {
+					log.Printf("[Miner] Mined Block #%d (and 9 others...)", block.Index)
+				}
 			}
 			time.Sleep(1 * time.Second)
 		}
