@@ -6,6 +6,7 @@ import WalletCard from '@/components/WalletCard';
 import { useStore } from '@/lib/store';
 import { encryptWasm, encryptInput, generateKey } from '@/lib/encryption';
 import { submitJob } from '@/lib/api';
+import { compileToWasm } from '@/lib/compiler';
 
 const EXAMPLE_C_CODE = `#include <stdio.h>
 
@@ -33,8 +34,8 @@ export default function EditorPage() {
     const handleSubmit = async () => {
         setIsSubmitting(true);
         try {
-            // For demo: compile code to WASM (in real app, use Emscripten WASM)
-            const wasmBytes = new TextEncoder().encode(code); // Placeholder
+            // Compile code to WASM (sends C code to backend for compilation)
+            const wasmBytes = await compileToWasm(code, language as 'c' | 'rust');
 
             let finalWasm = wasmBytes;
             let finalInput = input;
@@ -102,8 +103,8 @@ export default function EditorPage() {
                                     key={lang}
                                     onClick={() => setLanguage(lang)}
                                     className={`px-4 py-2 rounded-lg font-medium transition-all ${language === lang
-                                            ? 'bg-purple-600 text-white'
-                                            : 'bg-white/10 text-gray-400 hover:bg-white/20'
+                                        ? 'bg-purple-600 text-white'
+                                        : 'bg-white/10 text-gray-400 hover:bg-white/20'
                                         }`}
                                 >
                                     {lang.toUpperCase()}
