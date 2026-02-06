@@ -176,7 +176,7 @@ func (bc *Blockchain) AddBlock(txs []*Transaction) *Block {
 	newBlock := NewBlock(txs, lastHash, lastHeight+1)
 
 	// Proof of Work
-	fmt.Println("⛏️  Mining new block...")
+	// fmt.Println("⛏️  Mining new block...")
 	MineBlock(newBlock)
 	fmt.Printf("💎 Block Mined! Hash: %s\n", newBlock.Hash)
 
