@@ -1,6 +1,7 @@
 package api
 
 import (
+	"decentralized-net/compute"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -35,10 +36,36 @@ func (s *APIServer) handleJobSubmit(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("[API] Job Submit: WASM=%d bytes, Input=%s, TxID=%s", len(req.Wasm), req.Input, req.PaymentTx)
 
+	// Detect language and compile if needed
+	lang := compute.DetectLanguage(req.Wasm)
+	var wasmCode []byte
+	var err error
+
+	switch lang {
+case "c":
+		log.Printf("[API] Detected C code, compiling to WASM...")
+		wasmCode, err = compute.CompileCToWasm(string(req.Wasm))
+		if err != nil {
+			resp := map[string]interface{}{
+				"id":     fmt.Sprintf("job_%d", time.Now().UnixNano()),
+				"status": "failed",
+				"error":  fmt.Sprintf("Compilation failed: %v", err),
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(resp)
+			return
+		}
+		log.Printf("[API] Compilation successful, WASM size: %d bytes", len(wasmCode))
+	case "wasm":
+		wasmCode = req.Wasm
+	default:
+		http.Error(w, "Unsupported code format. Please provide C source or WASM binary.", http.StatusBadRequest)
+		return
+	}
+
 	// Find compute nodes
 	ctx := r.Context()
 	var result []byte
-	var err error
 
 	// Try to find remote compute nodes first
 	if s.Node.DHT != nil {
@@ -51,7 +78,7 @@ func (s *APIServer) handleJobSubmit(w http.ResponseWriter, r *http.Request) {
 					if s.Node.Host.Network().Connectedness(targetPeer) != network.Connected {
 						s.Node.Host.Connect(ctx, provider)
 					}
-					result, err = s.Node.SendComputeReq(ctx, targetPeer, req.Wasm, []byte(req.Input), req.PaymentTx)
+					result, err = s.Node.SendComputeReq(ctx, targetPeer, wasmCode, []byte(req.Input), req.PaymentTx)
 					break
 				}
 			}
@@ -61,7 +88,7 @@ func (s *APIServer) handleJobSubmit(w http.ResponseWriter, r *http.Request) {
 	// Fallback to local execution if no remote peers or remote execution failed
 	if result == nil && s.VM != nil {
 		log.Printf("[API] No remote peers available, executing locally")
-		result, err = s.VM.Run(req.Wasm, []byte(req.Input))
+		result, err = s.VM.Run(wasmCode, []byte(req.Input))
 	}
 
 	// Build response
