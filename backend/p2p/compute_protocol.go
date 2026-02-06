@@ -55,23 +55,19 @@ func (n *Node) HandleComputeStream(vm VMInterface) {
 		// PAYMENT VERIFICATION
 		if n.Chain != nil {
 			// Bypass for testing
-			if txID == "FREE_PASS" {
-				log.Printf("[Compute] Payment Verification Bypassed (FREE_PASS used)")
-			} else {
-				tx, err := n.Chain.FindTransaction(txID)
-				if err != nil {
-					log.Printf("[Compute] REJECTED: Payment Tx %s not found. Error: %v", txID, err)
-					// We should send error back, but for now just return/close
-					return
-				}
-
-				// Check Amount
-				if tx.Amount < 5 {
-					log.Printf("[Compute] REJECTED: Insufficient payment. Got %d, need 5.", tx.Amount)
-					return
-				}
-				log.Printf("[Compute] Payment Verified! Tx: %s (%d coins)", txID, tx.Amount)
+			tx, err := n.Chain.FindTransaction(txID)
+			if err != nil {
+				log.Printf("[Compute] REJECTED: Payment Tx %s not found. Error: %v", txID, err)
+				// We should send error back, but for now just return/close
+				return
 			}
+
+			// Check Amount
+			if tx.Amount < 5 {
+				log.Printf("[Compute] REJECTED: Insufficient payment. Got %d, need 5.", tx.Amount)
+				return
+			}
+			log.Printf("[Compute] Payment Verified! Tx: %s (%d coins)", txID, tx.Amount)
 		}
 
 		// 1. Read Wasm

@@ -1,10 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -196,31 +200,66 @@ func handlePayCmd(port *int, args []string) {
 	payCmd := flag.NewFlagSet("pay", flag.ExitOnError)
 	toAddr := payCmd.String("to", "", "Recipient Address")
 	amount := payCmd.Int("amount", 0, "Amount to send")
+	apiPort := payCmd.Int("api-port", 8080, "API Port of running node")
+
 	if err := payCmd.Parse(args); err != nil {
 		log.Fatalf("Failed flags: %v", err)
 	}
 
-	// Try Open Chain
+	if *toAddr == "" || *amount <= 0 {
+		log.Fatal("Usage: pay --to <addr> --amount <N> [--api-port 8080]")
+	}
+
+	// 1. Create Transaction (Offline)
+	// We need a dummy blockchain struct just to access CreateTransaction helper?
+	// Or we can just create the struct manually.
+	// CreateTransaction uses chain for timestamp, but mostly just signs.
+	// Actually, CreateTransaction is a method of *Blockchain.
+	// Let's replicate manual creation here to avoid DB dependency just for struct creation.
+	tx := &blockchain.Transaction{
+		From:      w.Address(),
+		To:        *toAddr,
+		Amount:    *amount,
+		Timestamp: time.Now().Unix(),
+	}
+	tx.ID = tx.CalculateHash()
+	sig, err := w.Sign([]byte(tx.ID))
+	if err != nil {
+		log.Fatalf("Failed to sign: %v", err)
+	}
+	tx.Signature = sig
+
+	// 2. Try Broadcast via API (Preferred)
+	apiURL := fmt.Sprintf("http://localhost:%d/api/v1/transaction", *apiPort)
+	log.Printf("Attempting to broadcast Tx %s to %s...", tx.ID, apiURL)
+
+	jsonData, _ := json.Marshal(tx)
+	resp, err := http.Post(apiURL, "application/json", bytes.NewBuffer(jsonData))
+
+	if err == nil && resp.StatusCode == 200 {
+		log.Printf("✅ Payment Sent Successfully! (via API)")
+		// Log response
+		body, _ := io.ReadAll(resp.Body)
+		log.Println(string(body))
+		return
+	}
+
+	log.Printf("⚠️ API Broadcast Failed (. Connection Refused?). Trying Direct DB Write...")
+
+	// 3. Fallback: Direct DB Write (Only works if node is OFF)
 	nodeID := "random"
 	if *port != 0 {
 		nodeID = fmt.Sprintf("%d", *port)
 	}
 
-	// WARNING: This will fail if server is running.
-	// The user must stop server to use 'pay' via CLI in this architecture,
-	// OR we need a "Remote Wallet" feature (skipped for this phase).
 	chain := blockchain.InitBlockchain(nodeID, w.Address())
 	defer chain.Close()
 
-	tx, err := chain.CreateTransaction(w.Address(), *toAddr, *amount, w)
-	if err != nil {
-		log.Fatalf("Failed: %v", err)
-	}
-
+	// Verify? We signed it ourselves, so it's valid.
 	chain.AddTransaction(tx)
-	log.Printf("Transaction Created: %s", tx.ID)
+	log.Printf("Transaction Added to Mempool (Offline Mode): %s", tx.ID)
 
-	// Auto-mine to confirm
+	// Auto-mine to confirm (since we are offline admin)
 	newBlock := chain.AddBlock([]*blockchain.Transaction{})
 	log.Printf("Confirmed in Block #%d", newBlock.Index)
 }

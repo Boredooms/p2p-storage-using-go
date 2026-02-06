@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 
+	"decentralized-net/blockchain"
 	"decentralized-net/p2p"
 	"decentralized-net/storage"
 
@@ -36,6 +37,7 @@ func StartAPIServer(node *p2p.Node, vault storage.VaultInterface, port int) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/job", server.handleJob)
 	mux.HandleFunc("/api/v1/upload", server.handleUpload)
+	mux.HandleFunc("/api/v1/transaction", server.handleTransaction)
 
 	addr := fmt.Sprintf(":%d", port)
 	log.Printf("[API] HTTP Gateway listening on http://localhost%s", addr)
@@ -188,5 +190,38 @@ func (s *APIServer) handleUpload(w http.ResponseWriter, r *http.Request) {
 		"shards_created": len(shards),
 		"shards_stored":  storedCount,
 		"nodes_involved": len(allNodes),
+	})
+}
+
+// handleTransaction handles POST /api/v1/transaction
+func (s *APIServer) handleTransaction(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var tx blockchain.Transaction
+	if err := json.NewDecoder(r.Body).Decode(&tx); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	// Add to Blockchain
+	if s.Node.Chain == nil {
+		http.Error(w, "Blockchain not initialized", http.StatusServiceUnavailable)
+		return
+	}
+
+	log.Printf("[API] Received Transaction: %s (Amount: %d)", tx.ID, tx.Amount)
+
+	if err := s.Node.Chain.AddTransaction(&tx); err != nil {
+		http.Error(w, fmt.Sprintf("Transaction Rejected: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"status": "success",
+		"tx_id":  tx.ID,
 	})
 }
