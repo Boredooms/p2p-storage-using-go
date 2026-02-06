@@ -486,7 +486,7 @@ func startFullNode(ctx context.Context, port *int, vaultPath *string, mode *stri
 					log.Printf("[Miner] Mined Block #%d (and 9 others...)", block.Index)
 				}
 			}
-			time.Sleep(1 * time.Second)
+			time.Sleep(5 * time.Second)
 		}
 	} else {
 		// Server Mode - Block Forever
