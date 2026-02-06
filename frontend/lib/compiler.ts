@@ -26,8 +26,8 @@ export async function compileToWasm(code: string, language: 'c' | 'rust'): Promi
         try {
             console.log('[Compiler] Attempting browser-based C → WASM compilation...');
 
-            // Use WasmFiddle API (free, no auth required)
-            const response = await fetch('https://wasm.fastlylabs.com/compile', {
+            // Use local API proxy to bypass CORS
+            const response = await fetch('/api/compile', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -35,7 +35,6 @@ export async function compileToWasm(code: string, language: 'c' | 'rust'): Promi
                 body: JSON.stringify({
                     source: code,
                     language: 'c',
-                    optimize: 2,
                 }),
             });
 
