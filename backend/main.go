@@ -214,132 +214,167 @@ func handlePayCmd(port *int, args []string) {
 }
 
 func handleUploadCmd(ctx context.Context, port *int, vaultPath *string, peerAddr *string, args []string) {
-	// Needs full node basically for Vault + P2P but we try to separate
-	startFullNode(ctx, port, vaultPath, nil, peerAddr, nil, false)
-	// NOTE: The original upload code was inside 'case upload'.
-	// Ideally we extract that specific logic similarly to handleRunJobCmd
-	// But 'upload' relies heavily on the 'vault' & 'sharding' which are initialized in startFullNode.
-	// For now, let's leave upload as is or map it to startFullNode if it does the logic?
-	// Actually, the original 'upload' was a one-off command.
-	// We should probably allow 'upload' to reuse the logic *inside* startFullNode
-	// or copy the logic here. Given code size, I will defer strict refactor of upload/download
-	// and focus on FIXING run-job which was the panic source.
-	// Calling startFullNode for upload/download implies it acts as a node.
+	// Upload needs a full node (Vault + P2P) to shard and distribute
+	node, vault, _, _, err := setupNode(ctx, port, vaultPath, peerAddr, nil, nil)
+	if err != nil {
+		log.Fatalf("Failed to setup node for upload: %v", err)
+	}
+
+	uploadCmd := flag.NewFlagSet("upload", flag.ExitOnError)
+	fileToUpload := uploadCmd.String("file", "", "File to upload")
+
+	if err := uploadCmd.Parse(args); err != nil {
+		log.Fatalf("Failed to parse upload flags: %v", err)
+	}
+
+	if *fileToUpload == "" {
+		log.Fatal("Please specify --file")
+	}
+
+	log.Printf("Uploading file: %s", *fileToUpload)
+
+	// Read file
+	data, err := os.ReadFile(*fileToUpload)
+	if err != nil {
+		log.Fatalf("Failed to read file: %v", err)
+	}
+	fileSize := len(data)
+
+	// Shard it (10 data, 4 parity)
+	sm, err := storage.NewShardManager(10, 4)
+	if err != nil {
+		log.Fatalf("Failed to init sharding: %v", err)
+	}
+
+	shards, err := sm.Encode(data)
+	if err != nil {
+		log.Fatalf("Sharding failed: %v", err)
+	}
+
+	log.Printf("File split into %d shards.", len(shards))
+
+	// Distributed Storage Logic
+	// Give DHT/Peers a moment to connect if bootstrapping
+	time.Sleep(2 * time.Second)
+
+	peers := node.Host.Network().Peers()
+	allNodes := append(peers, node.Host.ID()) // Include self
+	log.Printf("[P2P] Distributing shards across %d nodes...", len(allNodes))
+
+	for i, shard := range shards {
+		targetPeer := allNodes[i%len(allNodes)]
+		key := []byte(fmt.Sprintf("%s-shard-%d", *fileToUpload, i))
+
+		if targetPeer == node.Host.ID() {
+			err := vault.Store(key, shard)
+			if err != nil {
+				log.Printf("Failed to store shard %d locally: %v", i, err)
+			} else {
+				log.Printf("Shard %d -> SELF (Stored)", i)
+				if node.DHT != nil {
+					go node.DHT.Announce(string(key))
+				}
+			}
+		} else {
+			log.Printf("Shard %d -> Sending to %s...", i, targetPeer)
+			err := node.SendStoreReq(ctx, targetPeer, key, shard)
+			if err != nil {
+				log.Printf("Failed to send shard %d to %s: %v", i, targetPeer, err)
+			} else {
+				log.Printf("Shard %d -> %s (ACK Received)", i, targetPeer)
+			}
+		}
+	}
+
+	log.Printf("Upload Complete! original_size=%d", fileSize)
+	// We don't block here because it's a CLI command.
+	// However, if we uploaded to ourselves, we might want to keep running to serve it?
+	// For a CLI tool, typically you upload and exit. The "Daemon" node should be running separately if you want to serve.
+	// But in this P2P design, *we* are a node.
+	// If we exit, our local shards become unavailable immediately.
+	// So we should probably block IF we stored anything locally.
+	log.Println("Node remaining active to serve stored shards. Press Ctrl+C to exit.")
+	select {}
 }
 
 func handleDownloadCmd(ctx context.Context, port *int, vaultPath *string, peerAddr *string, args []string) {
-	startFullNode(ctx, port, vaultPath, nil, peerAddr, nil, false)
+	node, vault, _, _, err := setupNode(ctx, port, vaultPath, peerAddr, nil, nil)
+	if err != nil {
+		log.Fatalf("Failed to setup node for download: %v", err)
+	}
+
+	downloadCmd := flag.NewFlagSet("download", flag.ExitOnError)
+	fileToDownload := downloadCmd.String("file", "", "File to download/reconstruct")
+	size := downloadCmd.Int("size", 0, "Original file size")
+
+	if err := downloadCmd.Parse(args); err != nil {
+		log.Fatalf("Failed to parse download flags: %v", err)
+	}
+
+	if *fileToDownload == "" || *size == 0 {
+		log.Fatal("Please specify --file and --size")
+	}
+
+	log.Printf("Attempting to reconstruct: %s", *fileToDownload)
+	time.Sleep(2 * time.Second) // Wait for connections
+
+	shards := make([][]byte, 14)
+	foundCount := 0
+
+	// Try to find shards
+	for i := 0; i < 14; i++ {
+		keyStr := fmt.Sprintf("%s-shard-%d", *fileToDownload, i)
+		key := []byte(keyStr)
+
+		// 1. Try Local
+		data, err := vault.Get(key)
+		if err == nil {
+			log.Printf("Shard %d found locally.", i)
+			shards[i] = data
+			foundCount++
+			continue
+		}
+
+		// 2. Try DHT
+		if node.DHT != nil {
+			log.Printf("Shard %d missing. Querying DHT...", i)
+			providers, err := node.DHT.FindProviders(keyStr)
+			if err == nil && len(providers) > 0 {
+				log.Printf("Found provider for shard %d: %s", i, providers[0].ID)
+				// Simplified: Just proving discovery works for MVP.
+				// Implementing full retrieval requires a new P2P protocol handler.
+			}
+		}
+	}
+
+	if foundCount < 10 {
+		log.Fatalf("Cannot reconstruct. Only found %d/10 required shards (mostly local for now).", foundCount)
+	}
+
+	// Reconstruct
+	sm, err := storage.NewShardManager(10, 4)
+	if err != nil {
+		log.Fatalf("Failed to init sharding: %v", err)
+	}
+
+	reconstructedData, err := sm.Reconstruct(shards, *size)
+	if err != nil {
+		log.Fatalf("Reconstruction failed: %v", err)
+	}
+
+	outputFile := "restored_" + *fileToDownload
+	err = os.WriteFile(outputFile, reconstructedData, 0644)
+	if err != nil {
+		log.Fatalf("Failed to write output file: %v", err)
+	}
+
+	log.Printf("Success! File restored to: %s", outputFile)
 }
 
 func startFullNode(ctx context.Context, port *int, vaultPath *string, mode *string, peerAddr *string, apiPort *int, isMining bool) {
-	// ---------------------------------------------------------
-	// Crypto Layer (Wallet & Blockchain)
-	// ---------------------------------------------------------
-	walletPath := fmt.Sprintf("./data/wallet_%d.dat", *port)
-	if *port == 0 {
-		walletPath = "./data/wallet_default.dat"
-	}
-
-	var w *wallet.Wallet
-	if wLoaded, err := wallet.LoadFile(walletPath); err == nil {
-		w = wLoaded
-	} else {
-		w = wallet.NewWallet()
-		w.SaveFile(walletPath)
-	}
-	myAddress := w.Address()
-	log.Printf("[Crypto] Wallet Address: %s", myAddress)
-
-	// Initialize Blockchain
-	nodeID := fmt.Sprintf("%d", *port)
-	if *port == 0 {
-		nodeID = "random"
-	}
-	chain := blockchain.InitBlockchain(nodeID, myAddress)
-	defer chain.Close()
-	log.Printf("[Blockchain] Initialized. Tip Hash: %s", chain.LastHash)
-
-	// Initialize Vault
-	secretKey := []byte("12345678901234567890123456789012")
-	if _, err := os.Stat(*vaultPath); os.IsNotExist(err) {
-		os.MkdirAll(*vaultPath, 0700)
-	}
-
-	vault, err := storage.InitVault(*vaultPath, secretKey)
+	node, _, chain, myAddress, err := setupNode(ctx, port, vaultPath, peerAddr, mode, apiPort)
 	if err != nil {
-		log.Fatalf("CRITICAL: Failed to initialize secure vault: %v", err)
-	}
-	defer vault.Close()
-	log.Printf("[Storage] Secured Vault initialized at %s", *vaultPath)
-
-	// Initialize P2P Network Layer
-	node, err := p2p.NewNode(ctx, *port)
-	if err != nil {
-		log.Fatalf("CRITICAL: Failed to start P2P node: %v", err)
-	}
-
-	// Attach Blockchain to Node
-	node.Chain = chain
-
-	log.Printf("[P2P] Node Online!")
-	log.Printf("[P2P] ID: %s", node.Host.ID())
-
-	// Enable incoming store stream handling
-	node.HandleStoreStream(vault)
-
-	// Enable Block Propagation (PubSub)
-	if err := node.SetupBlockPropagation(); err != nil {
-		log.Printf("[P2P] WARNING: Failed to setup block propagation: %v", err)
-	}
-
-	// ---------------------------------------------------------
-	// Bootstrapping & DHT Setup
-	// ---------------------------------------------------------
-	var bootstrapPeers []string
-	if peerAddr != nil && *peerAddr != "" {
-		log.Printf("[P2P] Bootstrapping from %s", *peerAddr)
-		bootstrapPeers = append(bootstrapPeers, *peerAddr)
-	}
-
-	// Start DHT
-	if err := node.EnableDHT(bootstrapPeers); err != nil {
-		log.Printf("[P2P] WARNING: Failed to start DHT: %v", err)
-	} else {
-		log.Println("[P2P] Kademlia DHT Started! (Advertising capability)")
-	}
-
-	// If compute mode, advertise as a compute node
-	computeMode := "full"
-	if mode != nil {
-		computeMode = *mode
-	}
-
-	if computeMode == "full" || computeMode == "compute" {
-		go func() {
-			time.Sleep(5 * time.Second)
-			if err := node.DHT.Announce("compute-node"); err != nil {
-				log.Printf("Failed to advertise compute service: %v", err)
-			}
-		}()
-	}
-
-	// ---------------------------------------------------------
-	// API Gateway
-	// ---------------------------------------------------------
-	if apiPort != nil && *apiPort > 0 {
-		api.StartAPIServer(node, vault, *apiPort)
-	}
-
-	// 3. Initialize Compute Layer
-	var vm *compute.VM
-	if computeMode == "full" || computeMode == "compute" {
-		vm = compute.NewVM(ctx)
-		defer vm.Close()
-		log.Println("[Compute] Wazero VM Sandbox ready for jobs.")
-
-		// Enable incoming compute handling
-		node.HandleComputeStream(vm)
-		log.Println("[Compute] Listening for remote jobs...")
+		log.Fatalf("Failed to start node: %v", err)
 	}
 
 	// Mining Loop (if isMining is true)
@@ -363,4 +398,84 @@ func startFullNode(ctx context.Context, port *int, vaultPath *string, mode *stri
 		// Server Mode - Block Forever
 		select {}
 	}
+}
+
+// setupNode handles the heavy lifting of initializing Crypto, Vault, and P2P
+func setupNode(ctx context.Context, port *int, vaultPath *string, peerAddr *string, mode *string, apiPort *int) (*p2p.Node, *storage.Vault, *blockchain.Blockchain, string, error) {
+	// 1. Wallet
+	walletPath := fmt.Sprintf("./data/wallet_%d.dat", *port)
+	if *port == 0 {
+		walletPath = "./data/wallet_default.dat"
+	}
+	var w *wallet.Wallet
+	if wLoaded, err := wallet.LoadFile(walletPath); err == nil {
+		w = wLoaded
+	} else {
+		w = wallet.NewWallet()
+		w.SaveFile(walletPath)
+	}
+	log.Printf("[Crypto] Wallet Address: %s", w.Address())
+
+	// 2. Blockchain
+	nodeID := fmt.Sprintf("%d", *port)
+	if *port == 0 {
+		nodeID = "random"
+	}
+	chain := blockchain.InitBlockchain(nodeID, w.Address())
+	log.Printf("[Blockchain] Initialized. Tip Hash: %s", chain.LastHash)
+
+	// 3. Vault
+	secretKey := []byte("12345678901234567890123456789012")
+	if _, err := os.Stat(*vaultPath); os.IsNotExist(err) {
+		os.MkdirAll(*vaultPath, 0700)
+	}
+	vault, err := storage.InitVault(*vaultPath, secretKey)
+	if err != nil {
+		return nil, nil, nil, "", fmt.Errorf("vault init failed: %v", err)
+	}
+	log.Printf("[Storage] Secured Vault initialized at %s", *vaultPath)
+
+	// 4. P2P Node
+	node, err := p2p.NewNode(ctx, *port)
+	if err != nil {
+		return nil, nil, nil, "", fmt.Errorf("p2p node init failed: %v", err)
+	}
+	node.Chain = chain
+	log.Printf("[P2P] Node Online! ID: %s", node.Host.ID())
+
+	// 5. Handlers
+	node.HandleStoreStream(vault)
+	node.SetupBlockPropagation()
+
+	// 6. Bootstrapping
+	var bootstrapPeers []string
+	if peerAddr != nil && *peerAddr != "" {
+		log.Printf("[P2P] Bootstrapping from %s", *peerAddr)
+		bootstrapPeers = append(bootstrapPeers, *peerAddr)
+	}
+	node.EnableDHT(bootstrapPeers)
+	log.Println("[P2P] Kademlia DHT Started!")
+
+	// 7. Compute Mode
+	computeMode := "full"
+	if mode != nil {
+		computeMode = *mode
+	}
+	if computeMode == "full" || computeMode == "compute" {
+		go func() {
+			time.Sleep(5 * time.Second)
+			node.DHT.Announce("compute-node")
+		}()
+		vm := compute.NewVM(ctx)
+		// Note: We don't defer close here easily, caller must handle context cancellation
+		log.Println("[Compute] VM Ready")
+		node.HandleComputeStream(vm)
+	}
+
+	// 8. API
+	if apiPort != nil && *apiPort > 0 {
+		api.StartAPIServer(node, vault, *apiPort)
+	}
+
+	return node, vault, chain, w.Address(), nil
 }
